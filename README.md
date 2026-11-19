@@ -41,6 +41,9 @@ This repository contains the following static components that you will not have 
 2. `sampleSheet.csv`: Supply the sample information for this project. You can reference this example `sampleSheet.csv` here to modify this file accordingly. 
 
 # CHANGELOG: 
+#### November 2026: 
+Fix the nf bug where channels were randomlly assigned from fastp and thus the BAMs were not aligned corectly. 
+Fix RSEM required disk size in nf config
 #### February 2025: 
 Add publishDir for STAR aligned bam outputs 
 Add queueSize to in `nextflow.config` to control for oversubmitting

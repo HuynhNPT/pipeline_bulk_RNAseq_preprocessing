@@ -1,3 +1,14 @@
+## 2026-November: FIX sample mislabeling 
+Bug: `sample_fasta_*`, `STAR_*`, `rsem_expr_*` and `fastqc_*` received the sample name and that sample's
+files as SEPARATE queue channels (e.g. `STAR_paired(paired_ch, ref, fastp.out.trim_r1, fastp.out.trim_r2)`).
+Nextflow pairs separate channels by arrival order, not by sample, so outputs were named after one sample
+but contained another sample's reads. 
+Affects multi-sample run since commit 07aed22 (2025-01-06)
+Fix:
+1. fastp emits `tuple val(SAMPLE), path(trim_R1), path(trim_R2), emit: trimmed` (single-end: `trimmed`).
+2. STAR / sample_fasta / fastqc consume one sample-keyed tuple; RSEM consumes
+   `STAR.out.Tr_bam.join(salmon.out.salmon_out, failOnMismatch: true, failOnDuplicate: true)`.
+
 ## 2025-January:
 1. Update README regarding typo: MMYY_PROJECT.yaml to YYMM_PROJECT.yaml
 2. Update nextflow.config to reflect dynamic resource request for each module/process 

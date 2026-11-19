@@ -33,6 +33,12 @@ process checksum_compare {
         
     fi 
     """
+
+    stub:
+    """
+    echo ${SAMPLE} is good to go > ${SAMPLE}_md5.summary
+    is_faithful=true
+    """
 }
 
 process sample_fasta_paired {
@@ -43,9 +49,7 @@ process sample_fasta_paired {
     disk = { 64.GB * task.attempt }
 
     input: 
-    tuple val(SAMPLE), path(R1), path(R2)
-    path trim_R1
-    path trim_R2
+    tuple val(SAMPLE), path(trim_R1), path(trim_R2)
     val NR_READS
 
     output: 
@@ -54,6 +58,13 @@ process sample_fasta_paired {
     """
     seqtk sample -s2358 ${trim_R1} ${NR_READS} | gzip > ${SAMPLE}_sub_R1.fastq.gz
     seqtk sample -s2358 ${trim_R2} ${NR_READS} | gzip > ${SAMPLE}_sub_R2.fastq.gz
+    """
+
+    stub:
+    """
+    sleep \$(( RANDOM % 5 ))
+    zcat ${trim_R1} | gzip > ${SAMPLE}_sub_R1.fastq.gz
+    zcat ${trim_R2} | gzip > ${SAMPLE}_sub_R2.fastq.gz
     """
 }
 
@@ -65,8 +76,7 @@ process sample_fasta_single {
     disk = { 64.GB * task.attempt }
 
     input: 
-    tuple val(SAMPLE), path(R1)
-    path trim_R1
+    tuple val(SAMPLE), path(trim_R1)
     val NR_READS
 
     output: 
@@ -75,6 +85,11 @@ process sample_fasta_single {
     script:
     """
     seqtk sample -s2358 ${trim_R1} ${NR_READS} | gzip > ${SAMPLE}_sub_R1.fastq.gz
+    """
+
+    stub:
+    """
+    zcat ${trim_R1} | gzip > ${SAMPLE}_sub_R1.fastq.gz
     """
 }
 
@@ -95,5 +110,10 @@ process MULTIQC {
     """
     multiqc .
     mv multiqc_report.html multiqc_report_${pasi}.html
+    """
+
+    stub:
+    """
+    touch multiqc_report_${pasi}.html
     """
 }

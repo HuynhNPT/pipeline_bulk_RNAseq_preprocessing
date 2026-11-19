@@ -1,6 +1,12 @@
+/*
+ * Every process that consumes per-sample files takes ONE tuple keyed by SAMPLE.
+ * Never feed a process several independent queue channels: Nextflow pairs those by
+ * arrival order, not by sample (see CHANGELOG 2026-November).
+ */
+
 process fastp_single {
     container 'us-east1-docker.pkg.dev/compute-workspace/omics-docker-repo/rnaseq2'
-    
+
     publishDir "${params.out_bucket}/${SAMPLE}/logs/", mode: 'copy', pattern: '*.json'
 
     input:
@@ -8,7 +14,7 @@ process fastp_single {
 
     output:
     path("${SAMPLE}_fastp.json"), emit: fastp_log
-    path("clt_${SAMPLE}_R1.fastq.gz"), emit: trim_r1
+    tuple val(SAMPLE), path("clt_${SAMPLE}_R1.fastq.gz"), emit: trimmed
 
     script:
     """
@@ -25,18 +31,24 @@ process fastp_single {
             -w 2 -y -r \
             -j ${SAMPLE}_fastp.json
     """
+
+    stub:
+    """
+    sleep \$(( RANDOM % 5 ))
+    echo "reads_of=\$(zcat -f ${R1} | head -1)" | gzip > clt_${SAMPLE}_R1.fastq.gz
+    echo '{}' > ${SAMPLE}_fastp.json
+    """
 }
 
 
 
 process fastqc_single {
     container 'us-east1-docker.pkg.dev/compute-workspace/omics-docker-repo/rnaseq2'
-    
+
     publishDir "${params.out_bucket}/${SAMPLE}/logs/", mode: 'copy'
 
     input:
-    tuple val(SAMPLE), path(R1)
-    path(trim_R1)
+    tuple val(SAMPLE), path(R1), path(trim_R1)
 
     output:
     path("raw_fastqc_${SAMPLE}")
@@ -60,24 +72,34 @@ process fastqc_single {
                         -t ${task.cpus} \
                         ${trim_R1} ;
     """
+
+    stub:
+    """
+    mkdir raw_fastqc_${SAMPLE} clean_fastqc_${SAMPLE}
+    """
 }
 
 process STAR_single {
     container 'us-east1-docker.pkg.dev/compute-workspace/omics-docker-repo/rnaseq2'
-    
+
     publishDir "${params.out_bucket}/${SAMPLE}/logs/STAR/", mode: 'copy', pattern: '*.{out,log}'
 
-    input: 
-    tuple val(SAMPLE), path(R1)
+    input:
+    tuple val(SAMPLE), path(trim_R1)
     path STARREF
-    path trim_R1
 
-    output: 
+    output:
     path("*")
-    path("ctl_${SAMPLE}Aligned.toTranscriptome.out.bam"), emit: Tr_bam
+    tuple val(SAMPLE), path("ctl_${SAMPLE}Aligned.toTranscriptome.out.bam"), emit: Tr_bam
 
-    script: 
+    script:
     """
+    # Guard: refuse to align reads that belong to a different sample
+    if [ "${trim_R1}" != "clt_${SAMPLE}_R1.fastq.gz" ]; then
+        echo "SAMPLE MISMATCH: task ${SAMPLE} received ${trim_R1}" >&2
+        exit 1
+    fi
+
     STAR \
                         --twopassMode Basic \
                         --readFilesCommand zcat \
@@ -92,23 +114,34 @@ process STAR_single {
                         --outReadsUnmapped Fastx \
 			            --quantMode TranscriptomeSAM ;
     """
+
+    stub:
+    """
+    if [ "${trim_R1}" != "clt_${SAMPLE}_R1.fastq.gz" ]; then
+        echo "SAMPLE MISMATCH: task ${SAMPLE} received ${trim_R1}" >&2
+        exit 1
+    fi
+    sleep \$(( RANDOM % 5 ))
+    zcat ${trim_R1} > ctl_${SAMPLE}Aligned.toTranscriptome.out.bam
+    touch ctl_${SAMPLE}Log.final.out
+    """
 }
 
 process salmon_single {
     container 'us-east1-docker.pkg.dev/compute-workspace/omics-docker-repo/rnaseq2'
-    
+
     publishDir "${params.out_bucket}/${SAMPLE}/logs", mode: 'copy'
 
     input:
     path salmon_index
     tuple val(SAMPLE), path(sub_R1)
 
-    output: 
+    output:
     path("salmon_quant.log")
     tuple val(SAMPLE), env(rsemSTRAND), emit: salmon_out
-    
 
-    shell: 
+
+    shell:
     '''
     salmon quant \
                         -i !{salmon_index} \
@@ -136,6 +169,13 @@ process salmon_single {
     fi
 
     '''
+
+    stub:
+    """
+    sleep \$(( RANDOM % 5 ))
+    echo "strand_from=\$(zcat ${sub_R1})" > salmon_quant.log
+    rsemSTRAND="none"
+    """
 }
 
 process rsem_expr_single {
@@ -147,15 +187,20 @@ process rsem_expr_single {
 
     input:
     path(rsem_path)
-    path(Tr_bam)
-    tuple val(SAMPLE), val(rsemSTRAND)
+    tuple val(SAMPLE), path(Tr_bam), val(rsemSTRAND)
 
-    output: 
+    output:
     path("*")
 
-    shell: 
+    shell:
     '''
-    # Prepare STAR bam file 
+    # Guard: refuse to quantify a BAM that belongs to a different sample
+    if [ "!{Tr_bam}" != "ctl_!{SAMPLE}Aligned.toTranscriptome.out.bam" ]; then
+        echo "SAMPLE MISMATCH: task !{SAMPLE} received !{Tr_bam}" >&2
+        exit 1
+    fi
+
+    # Prepare STAR bam file
     samtools view -H !{Tr_bam} > file1 ;
     samtools view -@ !{task.cpus} !{Tr_bam} | awk '{printf "%s", \$0 " "; getline; print}' | sort -S 20G -T ./ | tr ' ' '\n' > file2 ;
     cat file1 file2 | samtools view -@ !{task.cpus} -bS - > rsem_!{SAMPLE}_Aligned.toTranscriptome.out.bam ;
@@ -177,4 +222,14 @@ process rsem_expr_single {
 
     sed -i '1i Quantifying expression level for !{SAMPLE} with strandedness set to !{rsemSTRAND}' rsem_!{SAMPLE}.log
     '''
+
+    stub:
+    """
+    if [ "${Tr_bam}" != "ctl_${SAMPLE}Aligned.toTranscriptome.out.bam" ]; then
+        echo "SAMPLE MISMATCH: task ${SAMPLE} received ${Tr_bam}" >&2
+        exit 1
+    fi
+    cat ${Tr_bam} > ${SAMPLE}.genes.results
+    echo "Quantifying expression level for ${SAMPLE} with strandedness set to ${rsemSTRAND}" > rsem_${SAMPLE}.log
+    """
 }

@@ -11,7 +11,7 @@ Workflow seeks to do the following:
 */
 workflow INPUT {
     main: 
-    input_ch=Channel.fromPath("sampleSheet.csv").splitCsv(header: true)
+    input_ch=Channel.fromPath("ipsc_e357").splitCsv(header: true)
     | map {
         row -> [ row.sample_name, //tuple
                  file("${params.projectDir}/${row.sample_dir}"),
@@ -47,7 +47,7 @@ workflow PAIRED_OR_SINGLE {
     */
     main:
     // Define R1 and R2 outputs
-    reads_ch = Channel.fromPath("sampleSheet.csv").splitCsv( header: true ) 
+    reads_ch = Channel.fromPath("ipsc_e357").splitCsv( header: true ) 
     | map {
         row ->
         // This is the csv entry
@@ -102,24 +102,27 @@ workflow {
     single_ch = result2.single.map{ sample_name, pass, paired, read1, read2 -> [sample_name, read1] }
 
     /* FINALLY EVOKE the PAIRED-END WORKFLOW */
+    // IMPORTANT: every per-sample channel is a tuple whose first element is the sample name,
+    // and channels are combined with join() (by sample name) -- NEVER passed as separate
+    // queue-channel arguments, which Nextflow pairs by arrival order (see CHANGELOG 2026-November).
     // # Trim reads
     fastp_paired(paired_ch)
     // # Subset reads and predict strandedness
-    sample_fasta_paired( paired_ch, fastp_paired.out.trim_r1, fastp_paired.out.trim_r2, 50000 )
+    sample_fasta_paired( fastp_paired.out.trimmed, 50000 )
     salmon_paired( file(params.salmonDir), sample_fasta_paired.out )
     // # Alignment and expression quantification
-    STAR_paired( paired_ch, file(params.refDir), fastp_paired.out.trim_r1, fastp_paired.out.trim_r2 )
-    rsem_expr_paired( file(params.refDir), STAR_paired.out.Tr_bam, salmon_paired.out.salmon_out  )
+    STAR_paired( fastp_paired.out.trimmed, file(params.refDir) )
+    rsem_expr_paired( file(params.refDir), STAR_paired.out.Tr_bam.join(salmon_paired.out.salmon_out, failOnMismatch: true, failOnDuplicate: true) )
     // QC report
-    fastqc_paired( paired_ch, fastp_paired.out.trim_r1, fastp_paired.out.trim_r2 )
+    fastqc_paired( paired_ch.join(fastp_paired.out.trimmed, failOnMismatch: true, failOnDuplicate: true) )
 
     /* SIMILAR SINGLE-END WORKFLOW */
     fastp_single(single_ch)
-    sample_fasta_single(single_ch, fastp_single.out.trim_r1, 50000)
+    sample_fasta_single( fastp_single.out.trimmed, 50000 )
     salmon_single( file(params.salmonDir), sample_fasta_single.out )
-    STAR_single( single_ch, file(params.refDir), fastp_single.out.trim_r1 )
-    rsem_expr_single( file(params.refDir), STAR_single.out.Tr_bam, salmon_single.out.salmon_out )
-    fastqc_single_ch = fastqc_single(single_ch, fastp_single.out.trim_r1)
+    STAR_single( fastp_single.out.trimmed, file(params.refDir) )
+    rsem_expr_single( file(params.refDir), STAR_single.out.Tr_bam.join(salmon_single.out.salmon_out, failOnMismatch: true, failOnDuplicate: true) )
+    fastqc_single_ch = fastqc_single( single_ch.join(fastp_single.out.trimmed, failOnMismatch: true, failOnDuplicate: true) )
 
     //TODO: multiQC
     MULTIP(fastqc_paired.out[0]
