@@ -1,4 +1,4 @@
-# pipeline_bulk_RNAseq_preprocessing_v2024_09
+# pipeline_bulk_RNAseq_preprocessing
 
 Pipeline to preprocess RNAseq fastqs to reads by genes or isoforms for secondary analyses. Pipeline automatically detects whether the reads are single-end or paired-end, and the strandedness of the reads.
 
